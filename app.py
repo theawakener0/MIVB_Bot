@@ -10,6 +10,7 @@ from langchain_google_genai import GoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import HumanMessage, SystemMessage
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 # Add this utility function near the top of your file
 # Replace the existing safe_print with this enhanced version
@@ -27,6 +28,15 @@ def safe_print(*args, **kwargs):
         # If all else fails, write directly to stderr
         text = ' '.join(str(arg) for arg in args)
         sys.stderr.write(text + '\n')
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    reraise=True
+)
+async def safe_llm_invoke(chain, inputs):
+    """Wrapper for LLM invocations with retry logic."""
+    return await chain.ainvoke(inputs)
 
 # --- Configuration ---
 load_dotenv() # Load variables from .env file
@@ -86,18 +96,18 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # --- Bot Events ---
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user.name} ({bot.user.id})')
-    print(f'Monitoring Channel ID: {SOURCE_CHANNEL_ID}')
-    print(f'Reporting Channel ID: {TARGET_CHANNEL_ID}')
-    print(f'Using LLM Model: {llm.model}')
-    print('------')
+    safe_print(f'Logged in as {bot.user.name} ({bot.user.id})')
+    safe_print(f'Monitoring Channel ID: {SOURCE_CHANNEL_ID}')
+    safe_print(f'Reporting Channel ID: {TARGET_CHANNEL_ID}')
+    safe_print(f'Using LLM Model: {llm.model}')
+    safe_print('------')
     
     # Register the slash command
     try:
         command = await bot.tree.sync()
-        print(f"Slash commands synced: {len(command)}")
+        safe_print(f"Slash commands synced: {len(command)}")
     except Exception as e:
-        print(f"Error syncing commands: {e}")
+        safe_print(f"Error syncing commands: {e}")
 
 # --- Helper: Compile Messages for LLM ---
 def compile_messages_for_llm(messages):
@@ -193,29 +203,43 @@ async def summarize_daily_report_llm(interaction: discord.Interaction):
 
         # --- Define Prompt for LLM ---
         system_prompt = (
-            "You are a comprehensive assistant analyzing a day's worth of Discord messages. "
-            "Provide an in-depth report covering:\n"
-            "- Detailed analysis of all major discussion topics (minimum 3 paragraphs per topic)\n"
-            "- Complete list of decisions/agreements with full context\n"
-            "- Thorough examination of questions asked (including follow-up analysis)\n"
-            "- Comprehensive list of action items with suggested next steps\n"
-            "- Extended sentiment analysis with supporting examples\n"
-            "- Minimum 10 detailed observations about the day's conversations\n"
-            "Your report should be extremely thorough, typically 1000+ words."
-        )
+                """
+
+                "أبو إسماعيل المحقق" – مساعدك الأمين في تحليل وتلخيص رسائل الديسكورد اليومية
+
+                تخيل معايا، عندك بوت ديسكورد اسمه "أبو إسماعيل المحقق"، شغله إنه يلمّ كل الرسائل اللي اتكتبت في القناة اللي تحددها خلال اليوم، ويستخدم الذكاء الاصطناعي عشان يحللها ويطلعلك تقرير مفصّل وشامل. التقرير ده مش بس بيقولك إيه اللي حصل، ده بيديك تحليل عميق لكل المواضيع اللي اتناقشت، القرارات اللي اتخذت، الأسئلة اللي اتسألت، والمهام اللي تم الاتفاق عليها.​
+
+                المهام الأساسية:
+
+                    تحليل معمّق للمواضيع الرئيسية: البوت بيستعرض كل موضوع تم مناقشته في القناة، وبيقدّم تحليل مفصّل لكل موضوع في 3 فقرات على الأقل، عشان تفهم كل جوانب الحوار وتبقى على دراية بكل التفاصيل.​
+
+                    قائمة كاملة بالقرارات والاتفاقات: بيوضّح كل قرار أو اتفاق تم التوصل ليه خلال المحادثات، مع تقديم السياق الكامل لكل قرار، عشان تكون فاهم الخلفية والسبب وراء كل اتفاق.​
+
+                    فحص شامل للأسئلة المطروحة: بيستعرض كل الأسئلة اللي اتسألت في القناة، مع تحليل المتابعات والتوضيحات اللي تمت عليها، عشان تفهم السياق الكامل لكل سؤال وإجاباته.​
+
+                    قائمة وافية بالمهام والإجراءات: بيحدد كل المهام اللي تم الاتفاق عليها خلال المحادثات، مع اقتراح الخطوات التالية لكل مهمة، عشان تقدر تتابع التنفيذ وتضمن إن كل حاجة ماشية حسب الخطة.​
+
+                    تحليل متقدّم للمشاعر: بيقدّم تحليل للمشاعر السائدة في المحادثات، مع أمثلة داعمة لكل حالة، عشان تفهم الأجواء العامة والتوجهات العاطفية للأعضاء.​
+
+                    10 ملاحظات تفصيلية عن المحادثات: بيسلّط الضوء على 10 نقاط مهمة أو ملاحظات لافتة من المحادثات اليومية، عشان تكون على دراية بأهم التفاصيل والمواضيع اللي تم التركيز عليها.​
+
+                خاصية التلخيص:
+
+                بالإضافة لكل المميزات دي، "أبو إسماعيل المحقق" بيقدّم لك ملخص سريع لكل المحادثات اليومية، بيديك نظرة شاملة على أهم الأحداث والمواضيع اللي تم مناقشتها، عشان لو كنت مستعجل تقدر تاخد فكرة سريعة من غير ما """
+                        )
         human_prompt_template = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
             ("human",
-                "Please analyze the following Discord messages from the channel '{channel_name}' for the date {date}. "
-                "Provide a comprehensive report covering:\n"
-                "- In-depth analysis of all discussion topics\n"
-                "- Complete behavioral patterns with message examples\n"
-                "- Detailed examination of communication style\n"
-                "- Thorough analysis of potential goals/interests\n"
-                "- Comprehensive list of key takeaways with recommendations\n"
-                "- Minimum 15 detailed observations about the user's activity\n"
-                "- Suggestions for moderator follow-up where appropriate\n\n"
-                "Here are the messages:\n"
+                "الرجاء تحليل رسائل الديسكورد التالية من القناة '{channel_name}' للتاريخ {date}. "
+                "قدم تقريراً شاملاً يغطي:\n"
+                "- تحليل معمق لجميع مواضيع النقاش\n"
+                "- أنماط السلوك الكاملة مع أمثلة من الرسائل\n"
+                "- دراسة تفصيلية لأسلوب التواصل\n"
+                "- تحليل شامل للأهداف والاهتمامات المحتملة\n"
+                "- قائمة شاملة بالنقاط الرئيسية مع التوصيات\n"
+                "- ما لا يقل عن 15 ملاحظة تفصيلية حول نشاط المستخدم\n"
+                "- اقتراحات للمشرفين للمتابعة حيثما كان ذلك مناسباً\n\n"
+                "فيما يلي الرسائل:\n"
                 "------\n"
                 "{message_log}\n"
                 "------"
@@ -242,11 +266,11 @@ async def summarize_daily_report_llm(interaction: discord.Interaction):
 
         # --- Format and Send Final Report ---
         report_header = (
-            f"## :scroll: COMPREHENSIVE DAILY REPORT - {now.strftime('%Y-%m-%d')}\n"
-            f"*In-depth analysis of {message_count} messages from {source_channel.mention}*\n"
+            f"## :scroll: التقرير اليومي الشامل - {now.strftime('%Y-%m-%d')}\n"
+            f"*تحليل معمق لـ {message_count} رسالة من {source_channel.mention}*\n"
             f"--------------------------------------------------\n"
-            f"*Generated by {llm.model} | Requested by {interaction.user.mention}*\n\n"
-            f"**This detailed report contains {len(llm_response.split())} words of analysis:**\n\n"
+            f"*تم إنشاؤه بواسطة {llm.model} | بطلب من {interaction.user.mention}*\n\n"
+            f"**يحتوي هذا التقرير المفصل على {len(llm_response.split())} كلمة من التحليل:**\n\n"
         )
         await send_report_chunks(target_channel, llm_response, report_header)
         safe_print(f"LLM summary sent successfully to #{target_channel.name}.")
@@ -275,6 +299,14 @@ USER_SUMMARY_COMMAND_NAME = "user_summary"
 
 # --- Slash Command for User Summary ---
 # For the user summary command
+# Add this near other channel ID variables
+USER_SUMMARY_CHANNEL_ID_STR = os.getenv("USER_SUMMARY_CHANNEL_ID")
+try:
+    USER_SUMMARY_CHANNEL_ID = int(USER_SUMMARY_CHANNEL_ID_STR) if USER_SUMMARY_CHANNEL_ID_STR else None
+except (ValueError, TypeError):
+    print("Error: USER_SUMMARY_CHANNEL_ID in .env must be a valid number.")
+    exit()
+
 @bot.tree.command(
     name=USER_SUMMARY_COMMAND_NAME,
     description="Summarizes recent messages for a specific user across all channels using an LLM."
@@ -286,10 +318,19 @@ async def user_activity_summary(
 ):
     """Fetches recent user messages from all channels, summarizes topics via LLM."""
     try:
+        # Get current time at start of function
+        now = datetime.datetime.now()
+        
         # Only defer if the interaction hasn't been responded to yet
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
-        
+            
+        # Get the summary channel
+        summary_channel = bot.get_channel(USER_SUMMARY_CHANNEL_ID)
+        if not summary_channel or not isinstance(summary_channel, discord.TextChannel):
+            await interaction.followup.send("Error: Could not access the user summary channel.", ephemeral=True)
+            return
+
         # Get all text channels in the server
         text_channels = [channel for channel in interaction.guild.text_channels 
                         if isinstance(channel, discord.TextChannel)]
@@ -327,62 +368,90 @@ async def user_activity_summary(
 
         # --- Prepare Data for LLM ---
         # Use the same helper to format the found messages
-        compiled_user_messages = compile_messages_for_llm(user_messages_in_channel)
+        compiled_user_messages = compile_messages_for_llm(user_messages)
 
         # --- Define SAFE Prompt for LLM (User Activity Summary) ---
         # **IMPORTANT**: This prompt focuses ONLY on summarizing message content, NOT user profiling.
         # Modify the system prompt for daily reports (around line 150)
         system_prompt = (
-        "You are a comprehensive assistant analyzing a day's worth of Discord messages. "
-        "Provide an in-depth report covering:\n"
-        "- Detailed analysis of all major discussion topics (minimum 3 paragraphs per topic)\n"
-        "- Complete list of decisions/agreements with full context\n"
-        "- Thorough examination of questions asked (including follow-up analysis)\n"
-        "- Comprehensive list of action items with suggested next steps\n"
-        "- Extended sentiment analysis with supporting examples\n"
-        "- Minimum 10 detailed observations about the day's conversations\n"
-        "Your report should be extremely thorough, typically 1000+ words."
+            """
+                أبو إسماعيل المحقق" – مساعدك الأمين في تحليل وتلخيص رسائل الديسكورد اليومية
+
+    تخيل معايا، عندك بوت ديسكورد اسمه "أبو إسماعيل المحقق"، شغله إنه يلمّ كل الرسائل اللي اتكتبت في القناة اللي تحددها خلال اليوم، ويستخدم الذكاء الاصطناعي عشان يحللها ويطلعلك تقرير مفصّل وشامل. التقرير ده مش بس بيقولك إيه اللي حصل، ده بيديك تحليل عميق لكل المواضيع اللي اتناقشت، القرارات اللي اتخذت، الأسئلة اللي اتسألت، والمهام اللي تم الاتفاق عليها.​​
+
+    المهام الأساسية:
+
+        تحليل معمّق للمواضيع الرئيسية: البوت بيستعرض كل موضوع تم مناقشته في القناة، وبيقدّم تحليل مفصّل لكل موضوع في 3 فقرات على الأقل، عشان تفهم كل جوانب الحوار وتبقى على دراية بكل التفاصيل.​​
+
+        قائمة كاملة بالقرارات والاتفاقات: بيوضّح كل قرار أو اتفاق تم التوصل ليه خلال المحادثات، مع تقديم السياق الكامل لكل قرار، عشان تكون فاهم الخلفية والسبب وراء كل اتفاق.​​
+
+        فحص شامل للأسئلة المطروحة: بيستعرض كل الأسئلة اللي اتسألت في القناة، مع تحليل المتابعات والتوضيحات اللي تمت عليها، عشان تفهم السياق الكامل لكل سؤال وإجاباته.​​
+
+        قائمة وافية بالمهام والإجراءات: بيحدد كل المهام اللي تم الاتفاق عليها خلال المحادثات، مع اقتراح الخطوات التالية لكل مهمة، عشان تقدر تتابع التنفيذ وتضمن إن كل حاجة ماشية حسب الخطة.​​
+
+        تحليل متقدّم للمشاعر: بيقدّم تحليل للمشاعر السائدة في المحادثات، مع أمثلة داعمة لكل حالة، عشان تفهم الأجواء العامة والتوجهات العاطفية للأعضاء.​​
+
+        10 ملاحظات تفصيلية عن المحادثات: بيسلّط الضوء على 10 نقاط مهمة أو ملاحظات لافتة من المحادثات اليومية، عشان تكون على دراية بأهم التفاصيل والمواضيع اللي تم التركيز عليها.​​
+
+    خاصية التلخيص:
+
+    بالإضافة لكل المميزات دي، "أبو إسماعيل المحقق" بيقدّم لك ملخص سريع لكل المحادثات اليومية، بيديك نظرة شاملة على أهم الأحداث والمواضيع اللي تم مناقشتها، عشان لو كنت مستعجل تقدر تاخد فكرة سريعة من غير ما تقرأ التقرير الكامل.
+            """
         )
         
         # Modify the user summary prompt (around line 340)
         system_prompt_user = ("""
-        You are an exhaustive analyst summarizing a user's Discord activity.
-        Provide a comprehensive 1500+ word report covering:
-        - In-depth analysis of all discussion topics (minimum 5 paragraphs per topic)
-        - Complete behavioral patterns with message examples
-        - Detailed examination of communication style
-        - Thorough analysis of potential goals/interests
-        - Comprehensive list of key takeaways with recommendations
-        - Minimum 15 detailed observations about the user's activity
-        - Suggestions for moderator follow-up where appropriate
+            أبو إسماعيل المحقق" – مساعدك الأمين في تحليل وتلخيص نشاط المستخدم في ديسكورد
+
+            تخيل معايا، عندك بوت ديسكورد اسمه "أبو إسماعيل المحقق"، شغله إنه يجمع كل الرسائل اللي كتبها المستخدم اللي تحدده خلال فترة معينة، ويستخدم الذكاء الاصطناعي عشان يحللها ويطلعلك تقرير مفصّل وشامل. التقرير ده مش بس بيقولك إيه اللي حصل، ده بيديك تحليل عميق لكل المواضيع اللي اتكلم فيها المستخدم، الأنماط السلوكية، أساليب التواصل، والأهداف والاهتمامات المحتملة.​​
+
+            المهام الأساسية:
+
+                تحليل معمّق للمواضيع الرئيسية: البوت بيستعرض كل موضوع اتكلم فيه المستخدم، وبيقدّم تحليل مفصّل لكل موضوع في 5 فقرات على الأقل، عشان تفهم كل جوانب الحوار وتبقى على دراية بكل التفاصيل.​​
+
+                اكتشاف الأنماط السلوكية: بيحلل سلوك المستخدم من خلال رسائله، وبيقدّم أمثلة توضيحية على الأنماط المتكررة، عشان تقدر تفهم تفاعل المستخدم بشكل أفضل.​​
+
+                فحص أساليب التواصل: بيستعرض أساليب التواصل اللي بيستخدمها المستخدم، وبيقدّم تحليل لكيفية تفاعله وتبادله للمعلومات.​​
+
+                تحليل الأهداف والاهتمامات المحتملة: من خلال تحليل المحتوى، البوت بيستنتج الأهداف والاهتمامات اللي بيسعى ليها المستخدم، وبيقدّم لك رؤية أوضح عن توجهاته.​​
+
+                قائمة بالاستنتاجات الرئيسية والتوصيات: بيقدّم لك قائمة بأهم النقاط المستخلصة من التحليل، مع توصيات قابلة للتنفيذ لتحسين إدارة القناة وتعزيز التفاعل.​​
+
+                15 ملاحظة تفصيلية عن نشاط المستخدم: بيسلّط الضوء على 15 نقطة مهمة أو ملاحظة لافتة من نشاط المستخدم، عشان تكون على دراية بأهم التفاصيل والمواضيع اللي بيركز عليها.​​
+
+                اقتراحات للمتابعة من قبل المشرفين: بيقدّم توصيات للمشرفين بخصوص المستخدم أو المواضيع اللي تحتاج لمتابعة خاصة، لضمان بيئة تواصل صحية وإيجابية.​​
+
+            خاصية التلخيص:
+
+            بالإضافة لكل المميزات دي، "أبو إسماعيل المحقق" بيقدّم لك ملخص سريع لكل نشاط المستخدم، بيديك نظرة شاملة على أهم الأحداث والمواضيع اللي تم مناقشتها، عشان لو كنت مستعجل تقدر تاخد فكرة سريعة من غير ما تقرأ التقرير الكامل.
         """)
         human_prompt_template_user = ChatPromptTemplate.from_messages([
             ("system", system_prompt_user),
             ("human",
-                "You are an intelligent analyst tasked with understanding user behavior in a Discord server.\n\n"
-                "Your goal is to generate a **personalized report** about user **'{user_name}'** based strictly on their recent messages "
-                "in the channel **'{channel_name}'**. Carefully read the following message excerpts and:\n\n"
-                "1. **Summarize their main discussion topics, concerns, and ideas.**\n"
-                "2. **Identify any patterns** in behavior, tone, or intent.\n"
-                "3. **Infer possible goals or interests** the user might have based on their communication.\n"
-                "4. **Highlight key takeaways** relevant to moderators or community managers (e.g., questions asked, issues raised, feedback given).\n"
-                "5. **Personalize the report** to reflect an understanding of the user's personality or communication style.\n\n"
-                "Be objective, insightful, and concise. Do not make up any information that isn't reflected in the messages.\n\n"
+                "أنت محلل ذكي مكلف بفهم سلوك المستخدم في خادم Discord.\n\n"
+                "هدفك هو إنشاء **تقرير مخصص** عن المستخدم **'{user_name}'** بناءً على رسائلهم الأخيرة "
+                "في القناة **'{channel_name}'**. اقرأ مقتطفات الرسائل التالية بعناية و:\n\n"
+                "1. **لخص مواضيع النقاش الرئيسية والمخاوف والأفكار.**\n"
+                "2. **حدد أي أنماط** في السلوك والنبرة والقصد.\n"
+                "3. **استنتج الأهداف أو الاهتمامات المحتملة** التي قد تكون لدى المستخدم بناءً على تواصله.\n"
+                "4. **سلط الضوء على النقاط الرئيسية** ذات الصلة بالمشرفين أو مديري المجتمع (مثل الأسئلة المطروحة والمشكلات المثارة والملاحظات المقدمة).\n"
+                "5. **خصص التقرير** ليعكس فهماً لشخصية المستخدم أو أسلوب تواصله.\n\n"
+                "كن موضوعياً وثاقب النظر ومختصراً. لا تختلق أي معلومات غير موجودة في الرسائل.\n\n"
                 "-----------------------------\n"
-                "Message History from {user_name}:\n"
+                "سجل الرسائل من {user_name}:\n"
                 "{message_log}\n"
                 "-----------------------------"
             )
         ])
 
         try:
-            print(f"Sending {len(user_messages_in_channel)} messages from {user.name} to Gemini for topic summary...")
+            print(f"Sending {len(user_messages)} messages from {user.name} to Gemini for topic summary...")
         except UnicodeEncodeError:
-            print(f"Sending {len(user_messages_in_channel)} messages from user ID {user.id} to Gemini for topic summary...")
+            print(f"Sending {len(user_messages)} messages from user ID {user.id} to Gemini for topic summary...")
 
         chain_user = human_prompt_template_user | llm | StrOutputParser()
         try:
-            llm_response = await chain_user.ainvoke({
+            llm_response = await safe_llm_invoke(chain_user, {
                 "user_name": user.display_name,
                 "channel_name": target_channel.name,
                 "message_log": compiled_user_messages
@@ -394,41 +463,37 @@ async def user_activity_summary(
 
         except Exception as e:
             print(f"Error invoking Gemini LLM for user activity summary: {e}")
-            await interaction.followup.send(f"Error: Failed to get summary from the LLM for {user.mention}. Error: {e}", ephemeral=True)
+            await interaction.followup.send(
+                f"⚠️ The LLM service is currently busy. Please try again later.\n"
+                f"Error details: {str(e)[:100]}...",
+                ephemeral=True
+            )
             return  # Stop processing
 
+
+        now = datetime.datetime.now()
+        
         # --- Format and Send Final Report (Publicly in context channel) ---
-        # Modify the report headers (around line 200 and 400)
         report_header = (
-        f"## :scroll: COMPREHENSIVE DAILY REPORT - {now.strftime('%Y-%m-%d')}\n"
-        f"*In-depth analysis of {message_count} messages from {source_channel.mention}*\n"
-        f"--------------------------------------------------\n"
-        f"*Generated by {llm.model} | Requested by {interaction.user.mention}*\n\n"
-        f"**This detailed report contains {len(llm_response.split())} words of analysis:**\n\n"
-        )
-        
-        # And for user summary:
-        report_header = (
-        f"## :bust_in_silhouette: COMPREHENSIVE USER ACTIVITY REPORT - {user.display_name}\n"
-        f"*In-depth analysis of {len(user_messages_in_channel)} messages from {target_channel.mention}*\n"
-        f"--------------------------------------------------\n"
-        f"*Generated by {llm.model} | Requested by {interaction.user.mention}*\n\n"
-        f"**This detailed report contains {len(llm_response.split())} words of analysis:**\n\n"
-        )
-        # Update the report header to reflect multi-channel search
-        report_header = (
-            f"## :bust_in_silhouette: COMPREHENSIVE USER ACTIVITY REPORT - {user.display_name}\n"
-            f"*In-depth analysis of {len(user_messages)} messages across {len(text_channels)} channels*\n"
+            f"## :bust_in_silhouette: تقرير نشاط المستخدم الشامل - {user.display_name}\n"
+            f"*تحليل معمق لـ {len(user_messages)} رسالة عبر {len(text_channels)} قناة*\n"
             f"--------------------------------------------------\n"
-            f"*Generated by {llm.model} | Requested by {interaction.user.mention}*\n\n"
-            f"**This detailed report contains {len(llm_response.split())} words of analysis:**\n\n"
+            f"*تم إنشاؤه بواسطة {llm.model} | بطلب من {interaction.user.mention}*\n\n"
+            f"**يحتوي هذا التقرير المفصل على {len(llm_response.split())} كلمة من التحليل:**\n\n"
         )
         
-        await send_report_chunks(interaction.channel, llm_response, report_header)
+        await send_report_chunks(summary_channel, llm_response, report_header)
         try:
-            print(f"User activity summary for {user.name} sent successfully to #{interaction.channel.name}.")
+            print(f"User activity summary for {user.name} sent successfully to #{summary_channel.name}.")
         except UnicodeEncodeError:
-            print(f"User activity summary for user ID {user.id} sent successfully to channel ID {interaction.channel.id}.")
+            print(f"User activity summary for user ID {user.id} sent successfully to channel ID {summary_channel.id}.")
+
+        # Notify user where the summary was sent
+        await interaction.followup.send(
+            f"User activity summary for {user.mention} has been generated and sent to {summary_channel.mention}.",
+            ephemeral=True
+        )
+
     except discord.Forbidden as e:
         await interaction.followup.send(f"Error: Bot lacks permissions to read history in {target_channel.mention if 'target_channel' in locals() else 'the specified channel'}. Details: {e}", ephemeral=True)
         print(f"Permissions Error (User Summary): {e}")
@@ -452,5 +517,8 @@ async def on_command_error(ctx, error):
 # --- Run the Bot ---
 if __name__ == "__main__":
     bot.run(BOT_TOKEN)
+
+
+
 
 
