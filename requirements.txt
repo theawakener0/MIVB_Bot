@@ -1,0 +1,8 @@
+discord.py
+google-generativeai
+python-dotenv
+langchain
+tenacity
+langchain-google-genai
+matplotlib
+textblob

@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 import os
-import datetime
+from datetime import datetime, timedelta
 import asyncio
 from dotenv import load_dotenv
 
@@ -71,7 +71,7 @@ if not SOURCE_CHANNEL_ID or not TARGET_CHANNEL_ID:
 
 # --- LangChain Setup ---
 try:
-    # Use Gemini 1.5 Pro (or adjust model name if you have 2.5 Pro access: "gemini-2.5-pro-latest")
+    # Initialize the LLM
     llm = GoogleGenerativeAI(
                             model="gemini-2.5-pro-exp-03-25",
                             google_api_key=GEMINI_API_KEY,
@@ -146,7 +146,109 @@ async def send_report_chunks(target_channel: discord.TextChannel, report_content
     # Send the last chunk
     await target_channel.send(current_chunk + footer)
 
+# helper functions
+from collections import defaultdict
+import matplotlib.pyplot as plt
+from io import BytesIO
+from textblob import TextBlob
+import numpy as np
 
+
+def analyze_sentiment(text):
+    """Analyze sentiment of text and return polarity score (-1 to 1)"""
+    try:
+        analysis = TextBlob(text)
+        return analysis.sentiment.polarity
+    except Exception as e:
+        print(f"Error analyzing sentiment: {e}")
+        return 0.0
+
+async def generate_heatmap(messages):
+    """Generate activity heatmap image with improved visualization"""
+    try:
+        # Extract message hours and count frequency
+        hours = [msg.created_at.hour for msg in messages]
+        
+        # Create figure with better styling
+        plt.style.use('ggplot')
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Plot histogram with enhanced appearance
+        n, bins, patches = plt.hist(hours, bins=24, range=(0, 24), 
+                                  color='#3498db', alpha=0.7,
+                                  edgecolor='black', linewidth=1)
+        
+        # Add grid and styling
+        plt.grid(True, alpha=0.3)
+        plt.title('Message Activity Distribution by Hour', 
+                 fontsize=14, pad=20)
+        plt.xlabel('Hour of Day (24-hour format)', fontsize=12)
+        plt.ylabel('Number of Messages', fontsize=12)
+        
+        # Customize x-axis
+        plt.xticks(range(0, 24, 2))
+        
+        # Add average line
+        avg = np.mean(n)
+        plt.axhline(y=avg, color='r', linestyle='--', 
+                   label=f'Average ({avg:.1f} messages)')
+        plt.legend()
+        
+        # Save plot to buffer
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    except Exception as e:
+        print(f"Error generating heatmap: {e}")
+        return None
+
+async def track_keywords(message):
+    """Enhanced keyword tracking with additional features"""
+    try:
+        # Get keywords and ignore case
+        keywords = [k.strip().lower() for k in 
+                   os.getenv('KEYWORDS_TO_TRACK', '').split(',') 
+                   if k.strip()]
+        
+        # Find matches with context
+        found_keywords = []
+        for kw in keywords:
+            if kw in message.content.lower():
+                # Get surrounding context
+                words = message.content.split()
+                for i, word in enumerate(words):
+                    if kw in word.lower():
+                        start = max(0, i - 3)
+                        end = min(len(words), i + 4)
+                        context = ' '.join(words[start:end])
+                        found_keywords.append((kw, context))
+        
+        if found_keywords:
+            # Get reporting channel
+            channel = bot.get_channel(int(os.getenv('MOD_REPORT_CHANNEL_ID')))
+            
+            # Create detailed alert message
+            alert = (
+                "⚠️ **Keyword Alert**\n"
+                f"**User:** {message.author.mention}\n"
+                f"**Channel:** {message.channel.mention}\n"
+                "**Found Keywords:**\n"
+            )
+            
+            # Add each keyword with context
+            for kw, context in found_keywords:
+                alert += f"• `{kw}` - Context: \"...{context}...\"\n"
+            
+            alert += f"\n**Message Link:** {message.jump_url}"
+            
+            # Send alert
+            await channel.send(alert)
+            
+    except Exception as e:
+        print(f"Error tracking keywords: {e}")
 # --- Slash Command ---
 # For the daily summary command
 @bot.tree.command(
@@ -172,9 +274,9 @@ async def summarize_daily_report_llm(interaction: discord.Interaction):
             return
 
         # --- Calculate Time Range for Today ---
-        now = datetime.datetime.now() # Bot server's local time
+        now = datetime.now() # Bot server's local time
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_of_day = start_of_day + datetime.timedelta(days=1)
+        end_of_day = start_of_day + timedelta(days=1)
 
         # --- Fetch Messages ---
         safe_print(f"Fetching messages from channel #{source_channel.name} for {now.strftime('%Y-%m-%d')}")
@@ -319,7 +421,7 @@ async def user_activity_summary(
     """Fetches recent user messages from all channels, summarizes topics via LLM."""
     try:
         # Get current time at start of function
-        now = datetime.datetime.now()
+        now =datetime.now()
         
         # Only defer if the interaction hasn't been responded to yet
         if not interaction.response.is_done():
@@ -471,7 +573,7 @@ async def user_activity_summary(
             return  # Stop processing
 
 
-        now = datetime.datetime.now()
+        now = datetime.now()
         
         # --- Format and Send Final Report (Publicly in context channel) ---
         report_header = (
@@ -503,6 +605,244 @@ async def user_activity_summary(
         import traceback
         traceback.print_exc()
 
+# Command constants with Arabic descriptions
+STATS_COMMAND = "server_stats"  # إحصائيات الخادم
+HEATMAP_COMMAND = "activity_heatmap"  # خريطة النشاط
+REPUTATION_COMMAND = "user_reputation"  # سمعة المستخدم
+
+@bot.tree.command(name=STATS_COMMAND, description="عرض إحصائيات رسائل الخادم")
+@commands.has_role(MOD_ROLE_NAME)
+async def server_stats(interaction: discord.Interaction, days: int = 7):
+    """Show detailed message statistics for the server"""
+    try:
+        # Defer the interaction response with a timeout
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        # Get the target channel for sending stats
+        target_channel = bot.get_channel(TARGET_CHANNEL_ID)
+        if not target_channel:
+            await interaction.followup.send("Error: Could not find target channel for stats", ephemeral=True)
+            return
+            
+    except discord.NotFound:
+        # Handle case where interaction token is invalid/expired
+        safe_print("Interaction expired or not found")
+        return
+    except discord.HTTPException as e:
+        # Handle other Discord API errors
+        safe_print(f"Error deferring interaction: {e}")
+        return
+    
+    try:
+        # Get messages from all channels with progress tracking
+        messages = []
+        channels_processed = 0
+        
+        for channel in interaction.guild.text_channels:
+            try:
+                async for msg in channel.history(
+                    limit=10000, 
+                    after=datetime.now() - timedelta(days=days)
+                ):
+                    if not msg.author.bot:
+                        messages.append(msg)
+                channels_processed += 1
+            except discord.Forbidden:
+                continue
+            except Exception as e:
+                safe_print(f"Error processing channel {channel.name}: {e}")
+                continue
+        
+        # Enhanced statistics calculation
+        user_counts = defaultdict(int)
+        channel_counts = defaultdict(int)
+        hourly_activity = defaultdict(int)
+        
+        for msg in messages:
+            user_counts[msg.author.display_name] += 1
+            channel_counts[msg.channel.name] += 1
+            hourly_activity[msg.created_at.hour] += 1
+        
+        # Get top statistics
+        top_users = sorted(user_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_channels = sorted(channel_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+        peak_hour = max(hourly_activity.items(), key=lambda x: x[1])[0]
+        
+        # Format statistics message
+        stats_message = (
+            f"**📊 إحصائيات الخادم (آخر {days} يوم):**\n"
+            f"إجمالي الرسائل: {len(messages)}\n"
+            f"المستخدمين النشطين: {len(user_counts)}\n"
+            f"القنوات النشطة: {channels_processed}\n"
+            f"ساعة الذروة: {peak_hour}:00\n\n"
+            f"**👥 أكثر المستخدمين نشاطاً:**\n"
+            + "\n".join(f"• {user}: {count} رسالة" for user, count in top_users)
+            + "\n\n**📢 أنشط القنوات:**\n"
+            + "\n".join(f"• #{channel}: {count} رسالة" for channel, count in top_channels)
+        )
+        
+        # Send to target channel and notify user
+        await target_channel.send(stats_message)
+        await interaction.followup.send(f"Statistics have been sent to {target_channel.mention}", ephemeral=True)
+        
+    except Exception as e:
+        await interaction.followup.send(
+            f"⚠️ حدث خطأ أثناء جمع الإحصائيات: {str(e)}",
+            ephemeral=True
+        )
+
+@bot.tree.command(name=HEATMAP_COMMAND, description="إنشاء خريطة حرارية للنشاط")
+@commands.has_role(MOD_ROLE_NAME)
+async def activity_heatmap(interaction: discord.Interaction, days: int = 7):
+    """Generate and send enhanced activity heatmap"""
+    try:
+        # Defer the interaction response with a timeout
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        # Get the target channel
+        target_channel = bot.get_channel(TARGET_CHANNEL_ID)
+        if not target_channel:
+            await interaction.followup.send("Error: Could not find target channel for heatmap", ephemeral=True)
+            return
+            
+    except discord.NotFound:
+        # Handle case where interaction token is invalid/expired
+        safe_print("Interaction expired or not found")
+        return
+    except discord.HTTPException as e:
+        # Handle other Discord API errors
+        safe_print(f"Error deferring interaction: {e}")
+        return
+    
+    try:
+        messages = []
+        for channel in interaction.guild.text_channels:
+            try:
+                async for msg in channel.history(
+                    limit=10000,
+                    after=datetime.now() - timedelta(days=days)
+                ):
+                    if not msg.author.bot:
+                        messages.append(msg)
+            except discord.Forbidden:
+                continue
+            except Exception as e:
+                safe_print(f"Error accessing channel {channel.name}: {e}")
+                continue
+        
+        if not messages:
+            await interaction.followup.send("❌ لم يتم العثور على رسائل للفترة المحددة")
+            return
+            
+        heatmap = await generate_heatmap(messages)
+        if heatmap:
+            # Send to target channel
+            await target_channel.send(
+                content=f"📊 خريطة النشاط (آخر {days} يوم)",
+                file=discord.File(heatmap, filename='heatmap.png')
+            )
+            await interaction.followup.send(f"Heatmap has been sent to {target_channel.mention}", ephemeral=True)
+        else:
+            await interaction.followup.send("⚠️ حدث خطأ أثناء إنشاء خريطة النشاط")
+            
+    except Exception as e:
+        await interaction.followup.send(
+            f"⚠️ حدث خطأ غير متوقع: {str(e)}",
+            ephemeral=True
+        )
+
+@bot.tree.command(name=REPUTATION_COMMAND, description="التحقق من سمعة المستخدم")
+@commands.has_role(MOD_ROLE_NAME)
+async def user_reputation(interaction: discord.Interaction, user: discord.Member):
+    """Calculate and display enhanced user reputation metrics"""
+    try:
+        # Defer the interaction response with a timeout
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        # Get the target channel
+        target_channel = bot.get_channel(TARGET_CHANNEL_ID)
+        if not target_channel:
+            await interaction.followup.send("Error: Could not find target channel for reputation", ephemeral=True)
+            return
+            
+    except discord.NotFound:
+        # Handle case where interaction token is invalid/expired
+        safe_print("Interaction expired or not found")
+        return
+    except discord.HTTPException as e:
+        # Handle other Discord API errors
+        safe_print(f"Error deferring interaction: {e}")
+        return
+    
+    try:
+        messages = []
+        total_channels = 0
+        
+        for channel in interaction.guild.text_channels:
+            try:
+                async for msg in channel.history(limit=10000):
+                    if msg.author.id == user.id and not msg.author.bot:
+                        messages.append(msg)
+                total_channels += 1
+            except discord.Forbidden:
+                continue
+            except Exception as e:
+                safe_print(f"Error accessing channel {channel.name}: {e}")
+                continue
+        
+        if not messages:
+            await interaction.followup.send(
+                f"❌ لم يتم العثور على رسائل للمستخدم {user.display_name}",
+                ephemeral=True
+            )
+            return
+            
+        # Enhanced reputation calculation
+        sentiment_scores = [analyze_sentiment(msg.content) for msg in messages]
+        avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0
+        
+        # Calculate additional metrics
+        active_channels = len(set(msg.channel.id for msg in messages))
+        msgs_per_day = len(messages) / 30  # Assuming last 30 days
+        
+        # Complex reputation formula
+        base_reputation = min(max(int((avg_sentiment + 1) * 50), 0), 100)
+        activity_bonus = min(int(msgs_per_day * 2), 20)  # Up to 20 points bonus
+        channel_bonus = min(int((active_channels / total_channels) * 30), 30)  # Up to 30 points bonus
+        
+        final_reputation = min(base_reputation + activity_bonus + channel_bonus, 100)
+        
+        # Determine reputation level
+        reputation_level = "ممتاز 🌟" if final_reputation >= 80 else \
+                         "جيد جداً ⭐" if final_reputation >= 60 else \
+                         "جيد ✨" if final_reputation >= 40 else \
+                         "مقبول 💫" if final_reputation >= 20 else "ضعيف 💢"
+        
+        reputation_message = (
+            f"**📊 تقرير سمعة {user.display_name}:**\n"
+            f"الدرجة النهائية: {final_reputation}/100\n"
+            f"المستوى: {reputation_level}\n\n"
+            f"**التفاصيل:**\n"
+            f"• السمعة الأساسية: {base_reputation}\n"
+            f"• مكافأة النشاط: +{activity_bonus}\n"
+            f"• مكافأة تنوع القنوات: +{channel_bonus}\n\n"
+            f"**الإحصائيات:**\n"
+            f"• عدد الرسائل: {len(messages)}\n"
+            f"• متوسط الرسائل اليومي: {msgs_per_day:.1f}\n"
+            f"• القنوات النشطة: {active_channels}/{total_channels}\n"
+            f"• المشاعر العامة: {'إيجابية 😊' if avg_sentiment > 0.2 else 'محايدة 😐' if abs(avg_sentiment) <= 0.2 else 'سلبية 😔'}"
+        )
+        
+        # Send to target channel and notify user
+        await target_channel.send(reputation_message)
+        await interaction.followup.send(f"Reputation report has been sent to {target_channel.mention}", ephemeral=True)
+        
+    except Exception as e:
+        await interaction.followup.send(
+            f"⚠️ حدث خطأ أثناء حساب السمعة: {str(e)}",
+            ephemeral=True
+        )
+
 # Add this error handler near your other error handling code
 @bot.event
 async def on_command_error(ctx, error):
@@ -513,6 +853,70 @@ async def on_command_error(ctx, error):
     elif isinstance(error, discord.NotFound) and error.code == 10062:
         # Ignore "Unknown interaction" errors
         pass
+
+# @bot.event
+# async def on_message(message):
+#     """
+#     Event handler for processing new messages.
+#     Handles keyword tracking, sentiment analysis, and command processing.
+#     """
+#     # Ignore bot messages
+#     if message.author.bot:
+#         return
+    
+#     try:
+#         # Track keywords with error handling
+#         try:
+#             await track_keywords(message)
+#         except Exception as e:
+#             safe_print(f"Error tracking keywords: {e}")
+        
+#         # Perform sentiment analysis with threshold check
+#         try:
+#             sentiment = analyze_sentiment(message.content)
+#             threshold = float(os.getenv('SENTIMENT_THRESHOLD', '-0.7'))
+            
+#             if sentiment < threshold:
+#                 # Get mod channel with validation
+#                 channel_id = os.getenv('MOD_REPORT_CHANNEL_ID')
+#                 if not channel_id:
+#                     safe_print("Error: MOD_REPORT_CHANNEL_ID not configured")
+#                     return
+                    
+#                 channel = bot.get_channel(int(channel_id))
+#                 if not channel:
+#                     safe_print(f"Error: Could not find channel {channel_id}")
+#                     return
+                
+#                 # Format message preview safely
+#                 preview = message.content[:100]
+#                 if len(message.content) > 100:
+#                     preview += "..."
+                
+#                 # Send alert with enhanced formatting
+#                 await channel.send(
+#                     f"⚠️ **تنبيه مشاعر سلبية**\n"
+#                     f"**المستخدم:** {message.author.mention}\n"
+#                     f"**القناة:** {message.channel.mention}\n"
+#                     f"**درجة المشاعر:** {sentiment:.2f}\n"
+#                     f"**معاينة الرسالة:** {preview}\n"
+#                     f"**السياق:** [عرض الرسالة]({message.jump_url})"
+#                 )
+                
+#         except ValueError as e:
+#             safe_print(f"Error parsing sentiment threshold: {e}")
+#         except Exception as e:
+#             safe_print(f"Error processing sentiment: {e}")
+    
+#     except Exception as e:
+#         safe_print(f"Error in message processing: {e}")
+    
+#     finally:
+#         # Always try to process commands
+#         try:
+#             await bot.process_commands(message)
+#         except Exception as e:
+#             safe_print(f"Error processing commands: {e}")
 
 # --- Run the Bot ---
 if __name__ == "__main__":
