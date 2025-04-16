@@ -6,3 +6,10 @@ tenacity
 langchain-google-genai
 matplotlib
 textblob
+aiosqlite
+numpy
+seaborn
+pandas
+SpeechRecognition
+pydub
+PyAudio
